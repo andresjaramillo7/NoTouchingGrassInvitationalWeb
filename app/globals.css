@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #090b0a;
+  --color-surface: #111411;
+  --color-elevated: #161a16;
+  --color-line: #252a25;
+  --color-ink: #f1f3ef;
+  --color-muted: #929891;
+  --color-moss: #687363;
+
+  /* Vivid, and only ever on competitive win/loss data. */
+  --color-win: #32e6a1;
+  --color-loss: #ff5d73;
+  /* Podium markers: bright warm gold crown, cool silver, warm bronze. */
+  --color-crown: #f5c851;
+  --color-medal-silver: #cbd1d6;
+  --color-medal-bronze: #c08a5e;
+
+  /* Skin rarity accents for the prize tiers. */
+  --color-epic: #8b6fb0;
+
+  --color-gold: #a9945c;
+  --color-silver: #9ba09a;
+  --color-bronze: #8a6a4b;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-moss) 45%, transparent);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-moss) 90%, white);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+}
+
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
