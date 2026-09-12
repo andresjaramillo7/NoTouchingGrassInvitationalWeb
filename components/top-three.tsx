@@ -1,3 +1,4 @@
+import { ChampionStrip } from "@/components/champion-strip";
 import { RankEmblem } from "@/components/rank-emblem";
 import { PositionMarker } from "@/components/position-marker";
 import { RoleIcon } from "@/components/role-icon";
@@ -32,8 +33,8 @@ function Card({
   const isFirst = position === 1;
 
   return (
-    <article className="relative overflow-hidden rounded-lg border border-line bg-surface p-4 md:p-3 lg:p-5 xl:p-6">
-      <span aria-hidden className={`absolute inset-x-0 top-0 h-px ${rule}`} />
+    <article className="relative rounded-lg border border-line bg-surface p-4 md:p-3 lg:p-5 xl:p-6">
+      <span aria-hidden className={`absolute inset-x-px top-0 h-px rounded-t-lg ${rule}`} />
 
       {/* Player leads — identity is the first thing read. */}
       <div className="flex min-w-0 items-center gap-2.5 md:gap-1.5 lg:gap-2.5">
@@ -106,8 +107,9 @@ function Card({
         </div>
       </dl>
 
-      <div className="mt-3.5 flex items-center justify-between gap-3 border-t border-line pt-3.5">
+      <div className="mt-3.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-line pt-3.5">
         <StreakBars player={player} showLabel />
+        <ChampionStrip champions={player.topChampions} size="sm" />
         <OpggLink player={player} />
       </div>
     </article>

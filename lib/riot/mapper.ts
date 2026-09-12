@@ -1,4 +1,5 @@
 import type { ParticipantConfig } from "@/data/participants";
+import type { ChampionStat } from "@/lib/champions";
 import {
   DIVISIONS,
   TIERS,
@@ -23,7 +24,11 @@ function toDivision(value: string): Division | null {
 }
 
 /** Manual metadata every mapped player carries regardless of data source. */
-function identity(config: ParticipantConfig, profileIcon: string | null) {
+function identity(
+  config: ParticipantConfig,
+  profileIcon: string | null,
+  topChampions: ChampionStat[] = [],
+) {
   return {
     id: config.id,
     displayName: config.gameName,
@@ -34,6 +39,7 @@ function identity(config: ParticipantConfig, profileIcon: string | null) {
     gameName: config.gameName,
     tagLine: config.tagLine,
     profileIcon,
+    topChampions,
   };
 }
 
@@ -50,9 +56,10 @@ export function toPlayer(
     entry: LeagueEntry | null;
     profileIcon: string | null;
     recentResults: MatchResult[];
+    topChampions: ChampionStat[];
   },
 ): Player {
-  const base = identity(config, riot.profileIcon);
+  const base = identity(config, riot.profileIcon, riot.topChampions);
   const tier = riot.entry ? toTier(riot.entry.tier) : null;
 
   if (!riot.entry || !tier) {

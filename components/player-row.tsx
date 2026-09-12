@@ -1,3 +1,4 @@
+import { ChampionStrip } from "@/components/champion-strip";
 import { RankBadge } from "@/components/rank-badge";
 import { PositionMarker } from "@/components/position-marker";
 import { RoleIcon } from "@/components/role-icon";
@@ -30,8 +31,8 @@ import { formatRiotId, isRanked, type Player } from "@/lib/ranks";
  *
  * Columns are disclosed progressively rather than scrolled sideways:
  *   md  - #, player, rank, LP, W/L, WR, STATS            (7)
- *   lg  - + streak                                       (8)
- *   xl  - + role                                         (9)
+ *   lg  - + streak, champions                            (9)
+ *   xl  - + role                                        (10)
  *
  * Role is the last thing added and the first thing dropped: player and rank
  * information never yields to it. The optional cells use `hidden`, so they
@@ -40,8 +41,8 @@ import { formatRiotId, isRanked, type Player } from "@/lib/ranks";
  */
 export const ROW_GRID = [
   "gap-2.5 grid-cols-[2.25rem_minmax(0,1fr)_7.5rem_3rem_4.75rem_3.5rem_3rem]",
-  "lg:gap-3 lg:grid-cols-[2.25rem_minmax(0,1fr)_9.5rem_3.75rem_5.75rem_4rem_5rem_3.25rem]",
-  "xl:gap-4 xl:grid-cols-[2.75rem_minmax(0,1fr)_4rem_11rem_4rem_6.5rem_4.75rem_6rem_3.75rem]",
+  "lg:gap-3 lg:grid-cols-[2.25rem_minmax(0,1fr)_9.5rem_3.75rem_5.75rem_4rem_5rem_5.25rem_3.25rem]",
+  "xl:gap-4 xl:grid-cols-[2.75rem_minmax(0,1fr)_4rem_11rem_4rem_6.5rem_4.75rem_6rem_6rem_3.75rem]",
 ].join(" ");
 
 /** Muted podium accents: an accent numeral and a 1px edge, nothing filled. */
@@ -122,6 +123,14 @@ export function PlayerRow({
           {ranked ? <StreakBars player={player} /> : <NoValue label="Streak" />}
         </span>
 
+        <span className="hidden justify-center lg:flex">
+          {player.topChampions.length > 0 ? (
+            <ChampionStrip champions={player.topChampions} size="md" />
+          ) : (
+            <NoValue label="Champions" />
+          )}
+        </span>
+
         <span className="flex justify-end">
           <OpggLink player={player} />
         </span>
@@ -161,6 +170,7 @@ export function PlayerRow({
               <WinLoss player={player} />
               <WinRate player={player} />
               <StreakBars player={player} showLabel />
+              <ChampionStrip champions={player.topChampions} size="sm" />
             </>
           ) : (
             <span className="font-mono text-xs text-muted/45">

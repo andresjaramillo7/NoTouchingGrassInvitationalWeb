@@ -6,6 +6,8 @@
  * exist purely to make ranks comparable and are never rendered.
  */
 
+import type { ChampionStat } from "@/lib/champions";
+
 export const TIERS = [
   "IRON",
   "BRONZE",
@@ -74,6 +76,16 @@ type PlayerIdentity = {
   tagLine: string;
   /** Riot profile icon URL, built from profileIconId. `null` when unknown. */
   profileIcon: string | null;
+
+  // --- DERIVED from persisted NTGI match history ---
+  /**
+   * Most-played champions during the event, best first.
+   *
+   * Empty when no event match history exists yet, or when the database is
+   * unreachable. An empty list renders nothing — never a placeholder, and
+   * never lifetime mastery standing in for event play.
+   */
+  topChampions: ChampionStat[];
 };
 
 /** Apex tiers carry no division; the union makes the invalid case unbuildable. */

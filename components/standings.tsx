@@ -49,6 +49,9 @@ export async function Standings() {
           <span className="eyebrow hidden text-center text-muted/60 lg:block">
             Streak
           </span>
+          <span className="eyebrow hidden text-center text-muted/60 lg:block">
+            Champions
+          </span>
           <span className="eyebrow text-right text-muted/60">Stats</span>
         </div>
 
