@@ -227,6 +227,8 @@ export async function syncMatchHistory(
   let reason: string | undefined;
   let stored: StoredMatch[] = [];
   let fetched = 0;
+  let storedMatches = 0;
+  let storedRows = 0;
 
   try {
     const batchResult = await fetchDetails(batch);
@@ -237,7 +239,9 @@ export async function syncMatchHistory(
       return match ? [match] : [];
     });
 
-    await storeMatches(stored);
+    const written = await storeMatches(stored);
+    storedMatches = written.matches;
+    storedRows = written.participantRows;
     completed = true;
 
     for (const match of stored) {
@@ -252,18 +256,13 @@ export async function syncMatchHistory(
     await releaseSyncLease(completed);
   }
 
-  const participantRows = stored.reduce(
-    (total, match) => total + match.participants.length,
-    0,
-  );
-
   return {
     outcomes,
     diagnostics: emptyDiagnostics(completed ? "synced" : "failed", reason, started, {
       ...base,
       detailsFetched: fetched,
-      matchesStored: completed ? stored.length : 0,
-      participantRows: completed ? participantRows : 0,
+      matchesStored: storedMatches,
+      participantRows: storedRows,
       backlog,
     }),
   };

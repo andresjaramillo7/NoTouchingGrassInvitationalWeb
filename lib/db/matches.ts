@@ -7,6 +7,7 @@
  * than by pulling tables into memory.
  */
 import { getSql, readOrFallback, type SqlClient } from "@/lib/db/sql";
+import { EVENT_START_AT } from "@/lib/event";
 
 /** One NTGI participant's appearance in one match. */
 export type ParticipantMatchRow = {
@@ -84,6 +85,9 @@ export function findStoredOutcomes(
   });
 }
 
+/** What a `storeMatches` call actually committed. */
+export type StoreResult = { matches: number; participantRows: number; rejected: number };
+
 /**
  * Persists a batch of matches and the NTGI participant rows inside them.
  *
@@ -91,17 +95,38 @@ export function findStoredOutcomes(
  * respected, and `ON CONFLICT DO NOTHING` everywhere so re-running a sync or a
  * half-finished backfill can never duplicate a row or raise.
  *
+ * The event window is re-checked here, at the only place that writes to the
+ * database. `toStoredMatch` already applies it, and Riot's match-id calls are
+ * asked to start at EVENT_START_AT — but a query filter is an assumption about
+ * an upstream service, and a caller could be added tomorrow that forgets the
+ * mapper. This guard is what actually makes "no row predates EVENT_START_AT" a
+ * property of the table rather than a property of the current call sites. It
+ * should never fire; if it does, that is a bug and it says so loudly.
+ *
  * Throws on failure. Callers decide whether a write failure is fatal; it never
  * deletes or rewrites anything already stored.
  */
-export async function storeMatches(batch: readonly StoredMatch[]): Promise<number> {
+export async function storeMatches(batch: readonly StoredMatch[]): Promise<StoreResult> {
+  const eventStartMs = EVENT_START_AT.getTime();
+  const accepted = batch.filter((match) => match.gameEndAt >= eventStartMs);
+  const rejected = batch.length - accepted.length;
+
+  if (rejected > 0) {
+    console.warn(
+      `[ntgi:db] refused to store ${rejected} match(es) that predate EVENT_START_AT ` +
+        `(${EVENT_START_AT.toISOString()}) — this should be unreachable`,
+    );
+  }
+
   const sql = getSql();
-  if (!sql || batch.length === 0) return 0;
+  if (!sql || accepted.length === 0) {
+    return { matches: 0, participantRows: 0, rejected };
+  }
 
-  const matchIds = batch.map((match) => match.matchId);
-  const endedAt = batch.map((match) => new Date(match.gameEndAt).toISOString());
+  const matchIds = accepted.map((match) => match.matchId);
+  const endedAt = accepted.map((match) => new Date(match.gameEndAt).toISOString());
 
-  const rows = batch.flatMap((match) =>
+  const rows = accepted.flatMap((match) =>
     match.participants.map((participant) => ({ ...participant, matchId: match.matchId })),
   );
 
@@ -125,7 +150,7 @@ export async function storeMatches(batch: readonly StoredMatch[]): Promise<numbe
     `,
   ]);
 
-  return batch.length;
+  return { matches: accepted.length, participantRows: rows.length, rejected };
 }
 
 /** How many event matches each participant has on record. Backfill reporting only. */

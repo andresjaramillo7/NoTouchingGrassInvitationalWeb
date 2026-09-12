@@ -154,6 +154,7 @@ async function main(): Promise<void> {
   let rowsStored = 0;
   let detailsFetched = 0;
   let skipped = 0;
+  let refused = 0;
 
   try {
     // --- Discovery: one pass per participant, paged back to EVENT_START_AT. ---
@@ -206,10 +207,11 @@ async function main(): Promise<void> {
         return match ? [match] : [];
       });
 
-      await storeMatches(batch);
+      const written = await storeMatches(batch);
 
-      matchesStored += batch.length;
-      rowsStored += batch.reduce((total, match) => total + match.participants.length, 0);
+      matchesStored += written.matches;
+      rowsStored += written.participantRows;
+      if (written.rejected > 0) refused += written.rejected;
 
       const done = Math.min(offset + CHUNK, pending.length);
       console.log(
@@ -243,6 +245,7 @@ async function main(): Promise<void> {
   console.log(`  matches stored  : ${matchesStored}`);
   console.log(`  participant rows: ${rowsStored}`);
   console.log(`  unreadable      : ${skipped}`);
+  console.log(`  refused (pre-event): ${refused}`);
   console.log(`  429 / 5xx       : ${rateLimited} / ${serverErrors}`);
   console.log(`  budget waiting  : ${Math.round(budget.waitedMs() / 1000)}s`);
 }

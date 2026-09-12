@@ -6,7 +6,7 @@ import {
   SYNC_COOLDOWN_SECONDS,
   SYNC_LEASE_SECONDS,
 } from "@/lib/db/lease";
-import { outcomeKey } from "@/lib/db/matches";
+import { outcomeKey, storeMatches } from "@/lib/db/matches";
 import { resetSqlForTests } from "@/lib/db/sql";
 import { EVENT_START_AT } from "@/lib/event";
 import { MATCH_DETAIL_BATCH, syncMatchHistory, type RosterMatchIds } from "@/lib/match-sync";
@@ -294,6 +294,36 @@ describe("match-history sync", () => {
     assert.equal(retry.diagnostics.status, "synced");
     assert.deepEqual(detailCalls, ["NA1_new"], "the unwritten match was retried, not lost");
     assert.equal(db.matches.size, 1);
+  });
+
+  it("refuses a pre-event match even when a caller bypasses the mapper", async () => {
+    // Deliberately hand storeMatches something toStoredMatch would have
+    // rejected. The event window has to hold at the write boundary, not only
+    // at the one call site that currently happens to filter.
+    const written = await storeMatches([
+      {
+        matchId: "NA1_too_old",
+        gameEndAt: EVENT_START_AT.getTime() - 1,
+        participants: [
+          { participantId: "player-a", championId: 64, championName: "LeeSin", won: true },
+        ],
+      },
+      {
+        matchId: "NA1_valid",
+        gameEndAt: EVENT_START_AT.getTime(),
+        participants: [
+          { participantId: "player-a", championId: 22, championName: "Ashe", won: false },
+        ],
+      },
+    ]);
+
+    assert.equal(written.rejected, 1);
+    assert.equal(written.matches, 1);
+    assert.equal(written.participantRows, 1);
+
+    assert.equal(db.matches.has("NA1_too_old"), false, "pre-event match must not be stored");
+    assert.equal(db.matches.has("NA1_valid"), true, "the boundary instant counts as in-event");
+    assert.equal(db.participantMatches.size, 1);
   });
 
   it("writes matches with ON CONFLICT DO NOTHING so a re-run cannot duplicate", async () => {

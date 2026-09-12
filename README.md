@@ -6,8 +6,8 @@ Standings are decided by each player's **final** Ranked Solo/Duo rank at
 December 31, 2026, 23:59:59 `America/Mexico_City`. Peak rank is not tracked and
 is not displayed.
 
-The event runs from **September 8, 2026, 00:00 `America/Mexico_City`**
-(`EVENT_START_AT` in `lib/event.ts`).
+The event runs from **September 11, 2026, 00:00 `America/Mexico_City`**
+(`2026-09-11T06:00:00Z`), set as `EVENT_START_AT` in `lib/event.ts`.
 
 ## Running it
 

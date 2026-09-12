@@ -18,11 +18,11 @@ type WallClock = {
   second: number;
 };
 
-/** September 8, 2026 at 00:00:00, local to EVENT_TIME_ZONE. */
+/** September 11, 2026 at 00:00:00, local to EVENT_TIME_ZONE. */
 const START_WALL_CLOCK: WallClock = {
   year: 2026,
   month: 9,
-  day: 8,
+  day: 11,
   hour: 0,
   minute: 0,
   second: 0,
