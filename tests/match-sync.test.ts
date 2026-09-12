@@ -166,36 +166,71 @@ describe("match-history sync", () => {
     assert.equal(db.matches.size, 25);
   });
 
-  it("does not call Riot while the cooldown is running", async () => {
+  /**
+   * A roster whose STREAK is fully satisfied from storage, plus one unknown
+   * event match sitting further back. Any Riot call in this shape would be a
+   * history download, which the cooldown and the lease must both prevent.
+   */
+  function rosterWithHistoryBacklogOnly(): RosterMatchIds {
+    const streakIds = ["NA1_s1", "NA1_s2", "NA1_s3", "NA1_s4", "NA1_s5"];
+    for (const [index, id] of streakIds.entries()) {
+      db.seedMatch({
+        matchId: id,
+        gameEndAt: ENDED_AT + index,
+        participantId: "player-a",
+        championId: 64,
+        championName: "LeeSin",
+        won: true,
+      });
+    }
+
+    return {
+      participantId: "player-a",
+      eventMatchIds: [...streakIds, "NA1_old_unknown"],
+      streakMatchIds: streakIds,
+    };
+  }
+
+  it("downloads no event history while the cooldown is running", async () => {
     const base = Date.now();
     db.now = () => base;
+    const entry = rosterWithHistoryBacklogOnly();
     db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: base - 60_000, leaseUntil: null });
 
     serveMatches({
-      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+      NA1_old_unknown: [
+        { puuid: "puuid-a", championId: 1, championName: "Annie", win: true },
+      ],
     });
 
-    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+    const result = await syncMatchHistory([entry], ROSTER_PUUIDS);
 
-    assert.deepEqual(detailCalls, []);
+    assert.deepEqual(detailCalls, [], "no Match-V5 detail for Top Champions");
     assert.equal(result.diagnostics.status, "skipped");
     assert.equal(result.diagnostics.reason, "cooldown");
+    assert.equal(result.diagnostics.detailsFetched, 0);
+    assert.equal(result.diagnostics.streakFallbackDetails, 0);
     assert.equal(result.diagnostics.backlog, 1, "the work is still waiting, not lost");
   });
 
-  it("does not call Riot while another instance holds the lease", async () => {
+  it("downloads no event history while another instance holds the lease", async () => {
     const base = Date.now();
     db.now = () => base;
+    const entry = rosterWithHistoryBacklogOnly();
     db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: null, leaseUntil: base + 60_000 });
 
     serveMatches({
-      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+      NA1_old_unknown: [
+        { puuid: "puuid-a", championId: 1, championName: "Annie", win: true },
+      ],
     });
 
-    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+    const result = await syncMatchHistory([entry], ROSTER_PUUIDS);
 
     assert.deepEqual(detailCalls, []);
     assert.equal(result.diagnostics.reason, "lease-held");
+    assert.equal(result.diagnostics.detailsFetched, 0);
+    assert.equal(result.diagnostics.streakFallbackDetails, 0);
   });
 
   it("recovers once an abandoned lease expires", async () => {
@@ -382,6 +417,142 @@ describe("match-history sync", () => {
     );
     assert.equal(db.matches.size, 0);
     assert.equal(db.participantMatches.size, 0);
+  });
+
+  it("renders the same STREAK whether the history sync ran or was skipped", async () => {
+    // The wini11 shape: four stored event games plus an older, unstored fifth.
+    const eventIds = ["NA1_e1", "NA1_e2", "NA1_e3", "NA1_e4"];
+    const preEvent = "NA1_pre";
+
+    for (const [index, id] of eventIds.entries()) {
+      db.seedMatch({
+        matchId: id,
+        gameEndAt: ENDED_AT + index,
+        participantId: "player-a",
+        championId: 141,
+        championName: "Kayn",
+        won: true,
+      });
+    }
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const matchId = url.split("/matches/")[1]?.split("?")[0] ?? "";
+      detailCalls.push(matchId);
+
+      return new Response(
+        JSON.stringify({
+          info: {
+            queueId: 420,
+            gameEndTimestamp: EVENT_START_AT.getTime() - 86_400_000,
+            participants: [
+              { puuid: "puuid-a", championId: 141, championName: "Kayn", win: true },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof globalThis.fetch;
+
+    const entry: RosterMatchIds = {
+      participantId: "player-a",
+      eventMatchIds: eventIds,
+      streakMatchIds: [...eventIds, preEvent],
+    };
+    const read = (r: Awaited<ReturnType<typeof syncMatchHistory>>) =>
+      entry.streakMatchIds.map((id) => r.outcomes.get(outcomeKey("player-a", id)));
+
+    // --- history sync ALLOWED ---
+    const allowed = await syncMatchHistory([entry], ROSTER_PUUIDS);
+    const allowedStreak = read(allowed);
+    const allowedCalls = [...detailCalls];
+
+    // --- history sync SKIPPED by cooldown ---
+    db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: Date.now(), leaseUntil: null });
+    detailCalls = [];
+
+    const skipped = await syncMatchHistory([entry], ROSTER_PUUIDS);
+    const skippedStreak = read(skipped);
+
+    assert.equal(skipped.diagnostics.status, "skipped");
+    assert.equal(skipped.diagnostics.reason, "cooldown");
+
+    // The core acceptance test: same Riot state, same bars either way.
+    assert.deepEqual(allowedStreak, [true, true, true, true, true]);
+    assert.deepEqual(
+      skippedStreak,
+      allowedStreak,
+      "STREAK must not depend on whether the history lease was acquired",
+    );
+
+    // The cooldown still protected history: no event history was downloaded,
+    // and the only call was the one streak-only detail.
+    assert.equal(skipped.diagnostics.detailsFetched, 0, "no history details while skipped");
+    assert.equal(skipped.diagnostics.streakFallbackDetails, 1);
+    assert.deepEqual(detailCalls, [preEvent]);
+    assert.deepEqual(allowedCalls, [preEvent]);
+
+    // And nothing pre-event was persisted, either way.
+    assert.equal(db.matches.has(preEvent), false);
+    assert.equal(db.matches.size, 4);
+    assert.equal(db.participantMatches.size, 4);
+  });
+
+  it("fetches nothing for STREAK once every result is already stored", async () => {
+    const ids = ["NA1_s1", "NA1_s2", "NA1_s3", "NA1_s4", "NA1_s5"];
+    for (const [index, id] of ids.entries()) {
+      db.seedMatch({
+        matchId: id,
+        gameEndAt: ENDED_AT + index,
+        participantId: "player-a",
+        championId: 64,
+        championName: "LeeSin",
+        won: index % 2 === 0,
+      });
+    }
+    serveMatches({});
+
+    const result = await syncMatchHistory([solo(ids, "player-a")], ROSTER_PUUIDS);
+
+    assert.deepEqual(detailCalls, [], "a warm database costs zero streak requests");
+    assert.equal(result.diagnostics.streakFallbackDetails, 0);
+  });
+
+  it("does not re-fetch a known remake to chase a fifth bar", async () => {
+    // Four countable results plus a remake already recorded in `matches`.
+    const ids = ["NA1_r1", "NA1_r2", "NA1_r3", "NA1_r4"];
+    for (const [index, id] of ids.entries()) {
+      db.seedMatch({
+        matchId: id,
+        gameEndAt: ENDED_AT + index,
+        participantId: "player-a",
+        championId: 64,
+        championName: "LeeSin",
+        won: true,
+      });
+    }
+    // Seen before, produced no participant row: a remake.
+    db.matches.set("NA1_remake", ENDED_AT + 9);
+    serveMatches({});
+
+    const result = await syncMatchHistory(
+      [
+        {
+          participantId: "player-a",
+          eventMatchIds: [...ids, "NA1_remake"],
+          streakMatchIds: [...ids, "NA1_remake"],
+        },
+      ],
+      ROSTER_PUUIDS,
+    );
+
+    assert.deepEqual(detailCalls, [], "a known non-result is never paid for twice");
+    assert.equal(result.diagnostics.streakFallbackDetails, 0);
+    assert.equal(
+      result.outcomes.get(outcomeKey("player-a", "NA1_remake")),
+      undefined,
+      "a remake is still not a W or an L",
+    );
   });
 
   it("refuses a pre-event match even when a caller bypasses the mapper", async () => {
