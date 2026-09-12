@@ -13,6 +13,8 @@
     "backfill:matches": "node --import tsx scripts/backfill-matches.ts"
   },
   "dependencies": {
+    "@neon/config": "^1.4.2",
+    "@neon/env": "^1.3.2",
     "@neondatabase/serverless": "^1.1.0",
     "next": "^16.3.4",
     "react": "^19.2.8",
