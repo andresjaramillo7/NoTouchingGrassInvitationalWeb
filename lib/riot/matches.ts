@@ -123,13 +123,15 @@ export function toStoredMatch(
 }
 
 /**
- * Raw win/loss for every NTGI participant in a match, ignoring the event
- * window entirely.
+ * Win/loss for every NTGI participant in a match, ignoring the event window.
  *
- * Used only by the no-database fallback, where STREAK still has to render the
- * five latest results even though nothing can be persisted. The stored path
- * goes through `toStoredMatch`, which applies the queue and event-window
- * filters that every row in the database must satisfy.
+ * This is what STREAK runs on. STREAK is the latest five Ranked Solo/Duo
+ * games full stop, so a game played before EVENT_START_AT still belongs on
+ * the bars — it simply must never be persisted, which is `toStoredMatch`'s
+ * job and the write-boundary guard's job, not this function's.
+ *
+ * Used by the no-database fallback, and by the sync for details it fetched
+ * but deliberately refused to store.
  */
 export function readOutcomes(
   detail: MatchDetail,
@@ -137,6 +139,12 @@ export function readOutcomes(
 ): { participantId: string; won: boolean }[] {
   return detail.info.participants.flatMap((entry) => {
     const participantId = participantIdByPuuid.get(entry.puuid);
-    return participantId ? [{ participantId, won: entry.win }] : [];
+    if (!participantId) return [];
+    // A remake is neither a win nor a loss, exactly as `toStoredMatch` treats
+    // it. "A countable Solo/Duo result" has to mean the same thing whether it
+    // reaches the UI from the database or straight from this payload.
+    if (entry.gameEndedInEarlySurrender) return [];
+
+    return [{ participantId, won: entry.win }];
   });
 }

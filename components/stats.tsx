@@ -1,3 +1,4 @@
+import { plural } from "@/lib/champions";
 import {
   currentStreak,
   formatRiotId,
@@ -61,8 +62,10 @@ export function StreakBars({
 
       <span className="sr-only">
         {streak
-          ? `Current streak: ${streak.capped ? "at least " : ""}${streak.count} ${
-              streak.result === "W" ? "wins" : "losses"
+          ? `Current streak: ${streak.capped ? "at least " : ""}${
+              streak.result === "W"
+                ? plural(streak.count, "win", "wins")
+                : plural(streak.count, "loss", "losses")
             }.`
           : "No recent games."}
       </span>

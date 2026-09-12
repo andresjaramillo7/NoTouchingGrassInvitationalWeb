@@ -26,11 +26,24 @@ export function formatChampionWinRate(champion: ChampionStat): string {
   return `${champion.winRate.toFixed(1)}%`;
 }
 
-/** "23 games · 14W · 9L · 60.9% WR", for screen readers and tooltips. */
+/** `1 game` / `2 games`, `1 win` / `2 wins`, `1 loss` / `2 losses`. */
+export function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * The champion tooltip as one sentence, for screen readers.
+ *
+ * The visible tooltip is a compact stack (`23 games` / `14W · 9L` / `60.9%
+ * WR`); this is the same numbers read aloud, so it spells the units out and
+ * agrees with them in number.
+ */
 export function describeChampion(champion: ChampionStat): string {
-  return `${champion.displayName}: ${champion.games} ${
-    champion.games === 1 ? "game" : "games"
-  }, ${champion.wins} wins, ${champion.losses} losses, ${formatChampionWinRate(
+  return `${champion.displayName}: ${plural(champion.games, "game", "games")}, ${plural(
+    champion.wins,
+    "win",
+    "wins",
+  )}, ${plural(champion.losses, "loss", "losses")}, ${formatChampionWinRate(
     champion,
   )} win rate during NTGI.`;
 }

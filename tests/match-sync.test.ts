@@ -296,6 +296,94 @@ describe("match-history sync", () => {
     assert.equal(db.matches.size, 1);
   });
 
+  it("uses a pre-event game for STREAK without ever persisting it", async () => {
+    // The exact wini11 shape: four event games plus an older fifth.
+    const preEvent = "NA1_pre";
+    const eventIds = ["NA1_e1", "NA1_e2", "NA1_e3", "NA1_e4"];
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const matchId = url.split("/matches/")[1]?.split("?")[0] ?? "";
+      detailCalls.push(matchId);
+
+      const endedAt =
+        matchId === preEvent ? EVENT_START_AT.getTime() - 86_400_000 : ENDED_AT;
+
+      return new Response(
+        JSON.stringify({
+          info: {
+            queueId: 420,
+            gameEndTimestamp: endedAt,
+            participants: [
+              { puuid: "puuid-a", championId: 141, championName: "Kayn", win: true },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof globalThis.fetch;
+
+    const streak = [...eventIds, preEvent];
+    const result = await syncMatchHistory(
+      [{ participantId: "player-a", eventMatchIds: eventIds, streakMatchIds: streak }],
+      ROSTER_PUUIDS,
+    );
+
+    // All five results are available to the renderer...
+    assert.deepEqual(
+      streak.map((id) => result.outcomes.get(outcomeKey("player-a", id))),
+      [true, true, true, true, true],
+      "STREAK must see all five latest Solo/Duo games",
+    );
+
+    // ...but only the four event games are history.
+    assert.equal(db.matches.has(preEvent), false, "pre-event match must not be persisted");
+    assert.equal(db.matches.size, 4);
+    assert.equal(db.participantMatches.size, 4);
+    assert.equal(result.diagnostics.matchesStored, 4);
+  });
+
+  it("keeps a remake out of STREAK as well as out of champion stats", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const matchId = url.split("/matches/")[1]?.split("?")[0] ?? "";
+      detailCalls.push(matchId);
+
+      return new Response(
+        JSON.stringify({
+          info: {
+            queueId: 420,
+            // Pre-event *and* a remake: still not a win or a loss.
+            gameEndTimestamp: EVENT_START_AT.getTime() - 86_400_000,
+            participants: [
+              {
+                puuid: "puuid-a",
+                championId: 141,
+                championName: "Kayn",
+                win: false,
+                gameEndedInEarlySurrender: true,
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof globalThis.fetch;
+
+    const result = await syncMatchHistory(
+      [solo(["NA1_remake"], "player-a")],
+      ROSTER_PUUIDS,
+    );
+
+    assert.equal(
+      result.outcomes.get(outcomeKey("player-a", "NA1_remake")),
+      undefined,
+      "a remake contributes no W/L anywhere",
+    );
+    assert.equal(db.matches.size, 0);
+    assert.equal(db.participantMatches.size, 0);
+  });
+
   it("refuses a pre-event match even when a caller bypasses the mapper", async () => {
     // Deliberately hand storeMatches something toStoredMatch would have
     // rejected. The event window has to hold at the write boundary, not only

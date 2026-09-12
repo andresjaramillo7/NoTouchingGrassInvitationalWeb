@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { toChampionStat } from "@/lib/champions";
+import { describeChampion, plural, toChampionStat } from "@/lib/champions";
 import { findTopChampions } from "@/lib/db/matches";
 import { resetSqlForTests } from "@/lib/db/sql";
 import { EVENT_START_AT } from "@/lib/event";
@@ -141,5 +141,42 @@ describe("top champions", () => {
 
     const all = await findTopChampions(3);
     assert.equal(all.size, 0);
+  });
+});
+
+describe("accessible labels", () => {
+  it("agrees in number with the count it describes", () => {
+    assert.equal(plural(1, "game", "games"), "1 game");
+    assert.equal(plural(2, "game", "games"), "2 games");
+    assert.equal(plural(0, "game", "games"), "0 games");
+    assert.equal(plural(1, "win", "wins"), "1 win");
+    assert.equal(plural(1, "loss", "losses"), "1 loss");
+    assert.equal(plural(3, "loss", "losses"), "3 losses");
+  });
+
+  it("reads a single-game champion correctly", () => {
+    const one = toChampionStat(
+      { participantId: "shiro", championId: 64, championName: "LeeSin", games: 1, wins: 1 },
+      "15.1.1",
+      new Map([["LeeSin", "Lee Sin"]]),
+    );
+
+    assert.equal(
+      describeChampion(one),
+      "Lee Sin: 1 game, 1 win, 0 losses, 100.0% win rate during NTGI.",
+    );
+  });
+
+  it("reads a multi-game champion correctly", () => {
+    const many = toChampionStat(
+      { participantId: "shiro", championId: 64, championName: "LeeSin", games: 23, wins: 14 },
+      "15.1.1",
+      new Map([["LeeSin", "Lee Sin"]]),
+    );
+
+    assert.equal(
+      describeChampion(many),
+      "Lee Sin: 23 games, 14 wins, 9 losses, 60.9% win rate during NTGI.",
+    );
   });
 });

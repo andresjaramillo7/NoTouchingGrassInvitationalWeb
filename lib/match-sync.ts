@@ -234,10 +234,23 @@ export async function syncMatchHistory(
     const batchResult = await fetchDetails(batch);
     fetched = batchResult.fetched;
 
-    stored = batchResult.details.flatMap((entry) => {
+    for (const entry of batchResult.details) {
       const match = toStoredMatch(entry.matchId, entry.detail, participantIdByPuuid);
-      return match ? [match] : [];
-    });
+
+      if (match) {
+        stored.push(match);
+        continue;
+      }
+
+      // Outside the event window. NTGI history rejects it — it is never
+      // written, never counted toward champion games, wins, losses or win
+      // rate — but STREAK means "the latest five Solo/Duo games", not "the
+      // latest five event games". The detail is already in hand, so its
+      // result is kept in memory for this render only and then discarded.
+      for (const { participantId, won } of readOutcomes(entry.detail, participantIdByPuuid)) {
+        outcomes.set(outcomeKey(participantId, entry.matchId), won);
+      }
+    }
 
     const written = await storeMatches(stored);
     storedMatches = written.matches;
