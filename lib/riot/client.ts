@@ -60,6 +60,23 @@ function requireApiKey(): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Per-process status tallies, for the one-line sync diagnostic.
+ *
+ * Counters, not an observability service: no spans, no exporter, no vendor.
+ */
+let rateLimited = 0;
+let serverErrors = 0;
+
+export function riotErrorCounts(): { rateLimited: number; serverErrors: number } {
+  return { rateLimited, serverErrors };
+}
+
+export function resetRiotErrorCountsForTests(): void {
+  rateLimited = 0;
+  serverErrors = 0;
+}
+
 /** Retry-After when Riot supplies one, else exponential backoff. */
 function retryDelayMs(status: number, retryAfterSeconds: number | undefined, attempt: number): number {
   if (status === 429 && retryAfterSeconds !== undefined) {
@@ -102,6 +119,9 @@ export async function riotFetch<T>(
     );
 
     if (response.ok) return (await response.json()) as T;
+
+    if (response.status === 429) rateLimited += 1;
+    else if (response.status >= 500) serverErrors += 1;
 
     const header = Number(response.headers.get("retry-after"));
     const retryAfterSeconds =

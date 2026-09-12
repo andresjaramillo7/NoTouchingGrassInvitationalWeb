@@ -1,0 +1,312 @@
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, it } from "node:test";
+
+import {
+  MATCH_SYNC_KEY,
+  SYNC_COOLDOWN_SECONDS,
+  SYNC_LEASE_SECONDS,
+} from "@/lib/db/lease";
+import { outcomeKey } from "@/lib/db/matches";
+import { resetSqlForTests } from "@/lib/db/sql";
+import { EVENT_START_AT } from "@/lib/event";
+import { MATCH_DETAIL_BATCH, syncMatchHistory, type RosterMatchIds } from "@/lib/match-sync";
+import { resetRiotErrorCountsForTests } from "@/lib/riot/client";
+import { resetGateForTests } from "@/lib/riot/gate";
+import { FakeDb, installFakeSql, uninstallFakeSql } from "@/tests/fake-sql";
+
+/**
+ * The request-saving rules, and the coordination that stops two instances
+ * syncing at once. Everything here asserts on how many times Riot was called.
+ */
+
+const ROSTER_PUUIDS = new Map([
+  ["puuid-a", "player-a"],
+  ["puuid-b", "player-b"],
+]);
+
+const ENDED_AT = EVENT_START_AT.getTime() + 3_600_000;
+
+let realFetch: typeof globalThis.fetch;
+let db: FakeDb;
+let detailCalls: string[];
+
+/** Serves any Match-V5 detail request, recording which ids were asked for. */
+function serveMatches(
+  byId: Record<string, { puuid: string; championId: number; championName: string; win: boolean }[]>,
+): void {
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const matchId = url.split("/matches/")[1]?.split("?")[0] ?? "";
+    detailCalls.push(matchId);
+
+    const participants = byId[matchId];
+    if (!participants) return new Response("not found", { status: 404 });
+
+    return new Response(
+      JSON.stringify({
+        info: { queueId: 420, gameEndTimestamp: ENDED_AT, participants },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof globalThis.fetch;
+}
+
+function solo(matchIds: string[], participantId: string): RosterMatchIds {
+  return { participantId, eventMatchIds: matchIds, streakMatchIds: matchIds.slice(0, 5) };
+}
+
+beforeEach(() => {
+  realFetch = globalThis.fetch;
+  process.env.RIOT_API_KEY = "test-key";
+  process.env.DATABASE_URL = "postgres://fake/ntgi";
+  resetGateForTests();
+  resetRiotErrorCountsForTests();
+  db = installFakeSql(new FakeDb());
+  detailCalls = [];
+});
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  uninstallFakeSql();
+  resetSqlForTests();
+  delete process.env.DATABASE_URL;
+});
+
+describe("match-history sync", () => {
+  it("never refetches a match it already has", async () => {
+    db.seedMatch({
+      matchId: "NA1_known",
+      gameEndAt: ENDED_AT,
+      participantId: "player-a",
+      championId: 64,
+      championName: "LeeSin",
+      won: true,
+    });
+
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 22, championName: "Ashe", win: false }],
+    });
+
+    const result = await syncMatchHistory(
+      [solo(["NA1_known", "NA1_new"], "player-a")],
+      ROSTER_PUUIDS,
+    );
+
+    assert.deepEqual(detailCalls, ["NA1_new"]);
+    assert.equal(result.diagnostics.alreadyKnown, 1);
+    assert.equal(result.diagnostics.detailsFetched, 1);
+
+    // The stored match still backs STREAK without costing a request.
+    assert.equal(result.outcomes.get(outcomeKey("player-a", "NA1_known")), true);
+    assert.equal(result.outcomes.get(outcomeKey("player-a", "NA1_new")), false);
+  });
+
+  it("fetches a shared match once and stores a row for both players", async () => {
+    serveMatches({
+      NA1_shared: [
+        { puuid: "puuid-a", championId: 64, championName: "LeeSin", win: true },
+        { puuid: "puuid-b", championId: 22, championName: "Ashe", win: true },
+      ],
+    });
+
+    const result = await syncMatchHistory(
+      [solo(["NA1_shared"], "player-a"), solo(["NA1_shared"], "player-b")],
+      ROSTER_PUUIDS,
+    );
+
+    assert.deepEqual(detailCalls, ["NA1_shared"], "one Riot call for one game");
+    assert.equal(result.diagnostics.matchesStored, 1);
+    assert.equal(result.diagnostics.participantRows, 2);
+    assert.equal(db.participantMatches.size, 2);
+  });
+
+  it("caps a large backlog at the batch limit and leaves the rest", async () => {
+    const ids = Array.from({ length: 55 }, (_, index) => `NA1_${index}`);
+    const byId = Object.fromEntries(
+      ids.map((id) => [id, [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }]]),
+    );
+    serveMatches(byId);
+
+    const result = await syncMatchHistory([solo(ids, "player-a")], ROSTER_PUUIDS);
+
+    assert.equal(detailCalls.length, MATCH_DETAIL_BATCH);
+    assert.equal(result.diagnostics.detailsFetched, MATCH_DETAIL_BATCH);
+    assert.equal(result.diagnostics.backlog, ids.length - MATCH_DETAIL_BATCH);
+    assert.equal(db.matches.size, MATCH_DETAIL_BATCH);
+  });
+
+  it("picks up where it left off on the next run and refetches nothing", async () => {
+    const ids = Array.from({ length: 25 }, (_, index) => `NA1_${index}`);
+    serveMatches(
+      Object.fromEntries(
+        ids.map((id) => [
+          id,
+          [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+        ]),
+      ),
+    );
+
+    await syncMatchHistory([solo(ids, "player-a")], ROSTER_PUUIDS);
+    const firstPass = [...detailCalls];
+
+    // The cooldown only applies to a *completed* sync, so move past it.
+    db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: 0, leaseUntil: null });
+    detailCalls = [];
+
+    const second = await syncMatchHistory([solo(ids, "player-a")], ROSTER_PUUIDS);
+
+    assert.equal(firstPass.length, MATCH_DETAIL_BATCH);
+    assert.equal(detailCalls.length, 5, "only the remaining backlog");
+    assert.equal(
+      firstPass.some((id) => detailCalls.includes(id)),
+      false,
+      "no match was fetched twice across runs",
+    );
+    assert.equal(second.diagnostics.backlog, 0);
+    assert.equal(db.matches.size, 25);
+  });
+
+  it("does not call Riot while the cooldown is running", async () => {
+    const base = Date.now();
+    db.now = () => base;
+    db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: base - 60_000, leaseUntil: null });
+
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+
+    assert.deepEqual(detailCalls, []);
+    assert.equal(result.diagnostics.status, "skipped");
+    assert.equal(result.diagnostics.reason, "cooldown");
+    assert.equal(result.diagnostics.backlog, 1, "the work is still waiting, not lost");
+  });
+
+  it("does not call Riot while another instance holds the lease", async () => {
+    const base = Date.now();
+    db.now = () => base;
+    db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: null, leaseUntil: base + 60_000 });
+
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+
+    assert.deepEqual(detailCalls, []);
+    assert.equal(result.diagnostics.reason, "lease-held");
+  });
+
+  it("recovers once an abandoned lease expires", async () => {
+    const base = Date.now();
+    db.now = () => base;
+
+    // A function that crashed mid-sync: lease taken, never released, expired.
+    db.sync.set(MATCH_SYNC_KEY, {
+      lastCompletedAt: base - (SYNC_COOLDOWN_SECONDS + 60) * 1000,
+      leaseUntil: base - 1_000,
+    });
+
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+
+    assert.deepEqual(detailCalls, ["NA1_new"]);
+    assert.equal(result.diagnostics.status, "synced");
+  });
+
+  it("takes no lease and makes no request when there is nothing new", async () => {
+    db.seedMatch({
+      matchId: "NA1_known",
+      gameEndAt: ENDED_AT,
+      participantId: "player-a",
+      championId: 64,
+      championName: "LeeSin",
+      won: true,
+    });
+    serveMatches({});
+
+    const result = await syncMatchHistory([solo(["NA1_known"], "player-a")], ROSTER_PUUIDS);
+
+    assert.deepEqual(detailCalls, []);
+    assert.equal(result.diagnostics.status, "synced");
+    assert.equal(db.sync.has(MATCH_SYNC_KEY), false, "no lease row written for no work");
+  });
+
+  it("keeps existing history when a write fails", async () => {
+    db.seedMatch({
+      matchId: "NA1_old",
+      gameEndAt: ENDED_AT,
+      participantId: "player-a",
+      championId: 64,
+      championName: "LeeSin",
+      won: true,
+    });
+
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    db.failWrites = true;
+
+    const result = await syncMatchHistory(
+      [solo(["NA1_old", "NA1_new"], "player-a")],
+      ROSTER_PUUIDS,
+    );
+
+    assert.equal(result.diagnostics.status, "failed");
+    assert.equal(db.matches.size, 1, "the old match survived");
+    assert.equal(db.participantMatches.size, 1);
+    assert.equal(result.outcomes.get(outcomeKey("player-a", "NA1_old")), true);
+
+    // A failed sync does not start the cooldown, so the next regeneration retries.
+    assert.equal(db.sync.get(MATCH_SYNC_KEY)?.lastCompletedAt, null);
+
+    // Releasing the lease is itself a write, so when the database is the thing
+    // that is broken it fails too. The expiry is the backstop: the lock is
+    // always time-bounded, never held forever by a failed run.
+    const leaseUntil = db.sync.get(MATCH_SYNC_KEY)?.leaseUntil;
+    assert.ok(leaseUntil);
+    assert.ok(
+      leaseUntil <= Date.now() + SYNC_LEASE_SECONDS * 1000,
+      "a failed sync must never hold the lease beyond its expiry",
+    );
+  });
+
+  it("hands the lease straight back when only the write failed", async () => {
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    db.failWrites = true;
+    const result = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+    assert.equal(result.diagnostics.status, "failed");
+
+    // The database recovers; the next regeneration is not blocked by a lease.
+    db.failWrites = false;
+    db.sync.set(MATCH_SYNC_KEY, { lastCompletedAt: null, leaseUntil: null });
+    detailCalls = [];
+
+    const retry = await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+    assert.equal(retry.diagnostics.status, "synced");
+    assert.deepEqual(detailCalls, ["NA1_new"], "the unwritten match was retried, not lost");
+    assert.equal(db.matches.size, 1);
+  });
+
+  it("writes matches with ON CONFLICT DO NOTHING so a re-run cannot duplicate", async () => {
+    serveMatches({
+      NA1_new: [{ puuid: "puuid-a", championId: 1, championName: "Annie", win: true }],
+    });
+
+    await syncMatchHistory([solo(["NA1_new"], "player-a")], ROSTER_PUUIDS);
+
+    const inserts = db.statements.filter((text) => text.startsWith("INSERT INTO"));
+    assert.equal(inserts.length, 2);
+    for (const statement of inserts) {
+      assert.match(statement, /ON CONFLICT .*DO NOTHING/);
+    }
+  });
+});

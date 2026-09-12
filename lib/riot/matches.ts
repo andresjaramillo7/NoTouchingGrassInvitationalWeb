@@ -1,50 +1,142 @@
-import { REGION_HOST, RiotApiError, riotFetch } from "@/lib/riot/client";
-import type { MatchResult } from "@/lib/ranks";
+import { EVENT_START_AT } from "@/lib/event";
+import type { StoredMatch } from "@/lib/db/matches";
+import { REGION_HOST, riotFetch } from "@/lib/riot/client";
 
-/** Ranked Solo/Duo. */
-const QUEUE_SOLO = 420;
-const RECENT_COUNT = 5;
+/** Ranked Solo/Duo. Flex, Normal, ARAM and everything else are ignored. */
+export const QUEUE_SOLO = 420;
 
-type MatchDetail = {
-  info: { participants: { puuid: string; win: boolean }[] };
+/** How many games STREAK is built from. */
+export const RECENT_COUNT = 5;
+
+/**
+ * How many match ids one discovery call asks for.
+ *
+ * One request, newest-first, restricted to the event window. Fifty Ranked
+ * Solo/Duo games is more than anyone plays between two regenerations — or
+ * across an idle afternoon — so a single page genuinely cannot miss an event
+ * match, and live sync never needs to paginate. Deep history is the backfill
+ * script's job, and it pages properly.
+ */
+export const DISCOVERY_PAGE_SIZE = 50;
+
+export type MatchParticipantDetail = {
+  puuid: string;
+  championId: number;
+  /** Data Dragon's champion id, e.g. "LeeSin" or "MonkeyKing". */
+  championName: string;
+  win: boolean;
+  gameEndedInEarlySurrender?: boolean;
+};
+
+export type MatchDetail = {
+  info: {
+    queueId: number;
+    gameEndTimestamp?: number;
+    gameStartTimestamp?: number;
+    gameDuration?: number;
+    participants: MatchParticipantDetail[];
+  };
 };
 
 /**
- * The five most recent Ranked Solo/Duo results, newest first.
+ * Ranked Solo/Duo match ids for one player, newest first.
  *
- * Riot returns match ids newest-first and we preserve that order, so
- * `recentResults[0]` is the latest game — which is what `currentStreak`
- * assumes. StreakBars reverses a copy for display, drawing oldest on the
- * left and newest on the right.
- *
- * A single unreadable match is skipped rather than failing the player.
+ * `startTime` is epoch *seconds* and is how the event window is enforced at
+ * the source: asking Riot for ids from EVENT_START_AT onward means we never
+ * pay for a match detail we would only throw away.
  */
-export async function getRecentSoloResults(
+export function getSoloMatchIds(
   puuid: string,
-): Promise<MatchResult[]> {
-  const matchIds = await riotFetch<string[]>(
+  options: { start?: number; count?: number; startTime?: number } = {},
+): Promise<string[]> {
+  const query: Record<string, string | number> = {
+    queue: QUEUE_SOLO,
+    start: options.start ?? 0,
+    count: options.count ?? RECENT_COUNT,
+  };
+
+  if (options.startTime !== undefined) query.startTime = options.startTime;
+
+  return riotFetch<string[]>(
     REGION_HOST,
     `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids`,
-    {
-      query: { queue: QUEUE_SOLO, start: 0, count: RECENT_COUNT },
-    },
+    { query },
   );
+}
 
-  const results = await Promise.all(
-    matchIds.map(async (matchId): Promise<MatchResult | null> => {
-      try {
-        const match = await riotFetch<MatchDetail>(
-          REGION_HOST,
-          `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
-        );
-        const me = match.info.participants.find((p) => p.puuid === puuid);
-        return me ? (me.win ? "W" : "L") : null;
-      } catch (error) {
-        if (error instanceof RiotApiError) return null;
-        throw error;
-      }
-    }),
+export function getMatchDetail(matchId: string): Promise<MatchDetail> {
+  return riotFetch<MatchDetail>(
+    REGION_HOST,
+    `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
   );
+}
 
-  return results.filter((result): result is MatchResult => result !== null);
+/** When the game actually finished, falling back when Riot omits the field. */
+export function matchEndedAt(detail: MatchDetail): number | null {
+  const { gameEndTimestamp, gameStartTimestamp, gameDuration } = detail.info;
+  if (gameEndTimestamp) return gameEndTimestamp;
+  if (gameStartTimestamp && gameDuration) {
+    return gameStartTimestamp + gameDuration * 1000;
+  }
+  return gameStartTimestamp ?? null;
+}
+
+/**
+ * Reduces a full Match-V5 payload to the handful of fields we persist.
+ *
+ * Returns `null` when the match does not belong to the event at all — wrong
+ * queue, or finished before EVENT_START_AT. Those are never stored, so the two
+ * invariants hold by construction for every row in the database.
+ *
+ * A match that passes but contains no NTGI participant with a countable result
+ * still returns a row with an empty roster: recording that we have *seen* the
+ * id is what stops us paying for it again. Remakes land here — Riot counts
+ * them for neither side, so they are seen but not tallied.
+ */
+export function toStoredMatch(
+  matchId: string,
+  detail: MatchDetail,
+  participantIdByPuuid: ReadonlyMap<string, string>,
+  eventStartMs: number = EVENT_START_AT.getTime(),
+): StoredMatch | null {
+  if (detail.info.queueId !== QUEUE_SOLO) return null;
+
+  const gameEndAt = matchEndedAt(detail);
+  if (gameEndAt === null || gameEndAt < eventStartMs) return null;
+
+  const participants = detail.info.participants.flatMap((entry) => {
+    const participantId = participantIdByPuuid.get(entry.puuid);
+    if (!participantId) return [];
+    if (entry.gameEndedInEarlySurrender) return [];
+
+    return [
+      {
+        participantId,
+        championId: entry.championId,
+        championName: entry.championName,
+        won: entry.win,
+      },
+    ];
+  });
+
+  return { matchId, gameEndAt, participants };
+}
+
+/**
+ * Raw win/loss for every NTGI participant in a match, ignoring the event
+ * window entirely.
+ *
+ * Used only by the no-database fallback, where STREAK still has to render the
+ * five latest results even though nothing can be persisted. The stored path
+ * goes through `toStoredMatch`, which applies the queue and event-window
+ * filters that every row in the database must satisfy.
+ */
+export function readOutcomes(
+  detail: MatchDetail,
+  participantIdByPuuid: ReadonlyMap<string, string>,
+): { participantId: string; won: boolean }[] {
+  return detail.info.participants.flatMap((entry) => {
+    const participantId = participantIdByPuuid.get(entry.puuid);
+    return participantId ? [{ participantId, won: entry.win }] : [];
+  });
 }

@@ -1,23 +1,42 @@
 /**
- * The single source of truth for when the challenge ends.
+ * The single source of truth for when the challenge starts and ends.
  *
- * The deadline is a wall-clock time in a named IANA zone, not a fixed UTC
- * offset. It is resolved to one absolute instant using the runtime's timezone
- * database, so every viewer counts down to the same moment no matter where
- * they are.
+ * Both boundaries are wall-clock times in a named IANA zone, not fixed UTC
+ * offsets. Each is resolved to one absolute instant using the runtime's
+ * timezone database, so every viewer — and every server — agrees on the same
+ * moment no matter where they are.
  */
 
 export const EVENT_TIME_ZONE = "America/Mexico_City";
 
+type WallClock = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+/** September 8, 2026 at 00:00:00, local to EVENT_TIME_ZONE. */
+const START_WALL_CLOCK: WallClock = {
+  year: 2026,
+  month: 9,
+  day: 8,
+  hour: 0,
+  minute: 0,
+  second: 0,
+};
+
 /** December 31, 2026 at 23:59:59, local to EVENT_TIME_ZONE. */
-const DEADLINE_WALL_CLOCK = {
+const DEADLINE_WALL_CLOCK: WallClock = {
   year: 2026,
   month: 12,
   day: 31,
   hour: 23,
   minute: 59,
   second: 59,
-} as const;
+};
 
 const zoneParts = new Intl.DateTimeFormat("en-US", {
   timeZone: EVENT_TIME_ZONE,
@@ -56,21 +75,37 @@ function zoneOffsetAt(utcMs: number): number {
 }
 
 /**
- * Converts the wall-clock deadline into an absolute instant.
+ * Converts a wall-clock time in EVENT_TIME_ZONE into an absolute instant.
  *
  * The offset is sampled twice: once from a first approximation, then again
  * from the corrected instant. That second pass keeps the result exact if the
- * zone's offset ever differs across the boundary (a DST transition).
+ * zone's offset differs across the boundary (a DST transition).
  */
-function resolveDeadline(): number {
-  const { year, month, day, hour, minute, second } = DEADLINE_WALL_CLOCK;
+function resolveWallClock(wall: WallClock): number {
+  const { year, month, day, hour, minute, second } = wall;
   const wallAsIfUtc = Date.UTC(year, month - 1, day, hour, minute, second);
 
   const approximate = wallAsIfUtc - zoneOffsetAt(wallAsIfUtc);
   return wallAsIfUtc - zoneOffsetAt(approximate);
 }
 
-export const EVENT_END = new Date(resolveDeadline());
+/**
+ * When NTGI began. Authoritative and explicit — never inferred from a commit
+ * date, a first observed match, or "whatever Riot returns".
+ *
+ * Every match stored for champion statistics must satisfy BOTH:
+ *   queueId === 420 (Ranked Solo/Duo)  AND  game end >= EVENT_START_AT
+ *
+ * Changing this changes which games count. It is not a tuning knob.
+ */
+export const EVENT_START_AT = new Date(resolveWallClock(START_WALL_CLOCK));
+
+/** Riot's match-id endpoint takes epoch *seconds*, not milliseconds. */
+export const EVENT_START_EPOCH_SECONDS = Math.floor(
+  EVENT_START_AT.getTime() / 1000,
+);
+
+export const EVENT_END = new Date(resolveWallClock(DEADLINE_WALL_CLOCK));
 
 /** How often the client re-checks the deadline. */
 export const TICK_MS = 1000;
