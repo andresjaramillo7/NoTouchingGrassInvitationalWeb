@@ -49,7 +49,7 @@ npm run build
 app/          layout, page, global styles
 components/   header, hero, countdown, standings, player-row, top-three,
               champion-strip, rank-badge, prizes, rules, footer
-data/         participants.ts — the eight real participants (manual metadata)
+data/         participants.ts — the real participants (manual metadata)
 lib/          ranks.ts       — rank model, ordering, formatting
               event.ts       — EVENT_START_AT, EVENT_END, countdown math
               standings.ts   — the one Riot workload, start to finish
@@ -115,7 +115,7 @@ raw Riot JSON, and no rank snapshots, LP history, identity cache or profile TTL.
 
 Every stored match satisfies both `queueId === 420` and
 `game end >= EVENT_START_AT`. Champion statistics are aggregated on demand in
-Postgres — eight participants over one indexed table needs no materialised
+Postgres — a roster this size over one indexed table needs no materialised
 aggregate.
 
 If Neon is unreachable, champion history simply does not render. Nothing is
