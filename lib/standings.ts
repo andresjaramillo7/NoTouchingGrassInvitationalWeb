@@ -26,7 +26,7 @@ import { getSummonerByPuuid } from "@/lib/riot/summoner";
  * How many participants resolve at once.
  *
  * The global gate in lib/riot/gate.ts is what actually protects the rate
- * limit; this just keeps the fan-out tidy for eight players.
+ * limit; this just keeps the fan-out tidy for a roster of this size.
  */
 const PARTICIPANT_CONCURRENCY = 2;
 

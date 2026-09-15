@@ -175,8 +175,8 @@ export function countStoredMatchesByParticipant(): Promise<Map<string, number>> 
  *
  * The champion name is taken from the most recent appearance, so a Riot
  * rename shows the current name rather than whichever one we happened to
- * store first. Nothing here is materialised into an aggregate table: eight
- * participants over one small, indexed table is a trivial query.
+ * store first. Nothing here is materialised into an aggregate table: a roster
+ * this size over one small, indexed table is a trivial query.
  */
 export function findTopChampions(limit = 3): Promise<Map<string, ChampionTally[]>> {
   return readOrFallback("findTopChampions", new Map<string, ChampionTally[]>(), runTopChampions(limit));

@@ -11,7 +11,7 @@ const FALLBACK_VERSION = "15.1.1";
 
 /**
  * Latest Data Dragon patch — resolved once per standings regeneration and
- * reused for all eight profile icons. Pinned to the same ISR window as
+ * reused for every profile icon on the page. Pinned to the same ISR window as
  * everything else so no cache outlives the generated page.
  */
 export async function getDataDragonVersion(): Promise<string> {

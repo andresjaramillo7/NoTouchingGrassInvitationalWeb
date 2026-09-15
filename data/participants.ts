@@ -25,7 +25,10 @@ export type ParticipantConfig = {
 };
 
 /**
- * The eight real participants. Every one resolves through the Riot API.
+ * The real participants. Every one resolves through the Riot API.
+ *
+ * Adding someone here is the whole job: standings, rank lookup, STREAK,
+ * match-history sync and Top Champions all iterate this list.
  *
  * Riot IDs are stored exactly as Riot holds them, including non-ASCII
  * characters. Invisible bidirectional formatting marks that survive a paste
@@ -102,6 +105,15 @@ export const participants: ParticipantConfig[] = [
     role: "JUNGLE",
     twitchUsername: "codeslayrr",
     twitchUrl: "https://www.twitch.tv/codeslayrr",
+    isLive: false,
+  },
+  {
+    id: "espiropapa",
+    gameName: "Espiropapa",
+    tagLine: "5891",
+    role: "JUNGLE",
+    twitchUsername: null,
+    twitchUrl: null,
     isLive: false,
   },
 ];
