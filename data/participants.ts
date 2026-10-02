@@ -116,4 +116,13 @@ export const participants: ParticipantConfig[] = [
     twitchUrl: null,
     isLive: false,
   },
+  {
+    id: "nocturne",
+    gameName: "Jayce Ventura",
+    tagLine: "HXTCH",
+    role: "TOP",
+    twitchUsername: null,
+    twitchUrl: null,
+    isLive: false,
+  },
 ];
